@@ -1,0 +1,140 @@
+version: '3.8'
+
+services:
+  # REST API Server
+  api-server:
+    build: ./api-server
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./api-server:/app
+      - /app/node_modules
+    depends_on:
+      kafka:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+      - LOKI_URL=http://loki:3100
+    networks:
+      - monitoring-network
+    restart: always
+
+  workload-simulator:
+    build: 
+      context: ./api-server
+      dockerfile: Dockerfile
+    command: node src/workload-simulator.js
+    depends_on:
+      api-server:
+        condition: service_started
+    environment:
+      - REQUEST_INTERVAL=1000
+    restart: always
+    networks:
+      - monitoring-network
+
+  log-consumer:
+    build: 
+      context: ./api-server
+      dockerfile: Dockerfile
+    command: node src/log-consumer.js
+    depends_on:
+      kafka:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+      - LOKI_URL=http://loki:3100
+    restart: always
+    networks:
+      - monitoring-network
+
+  # Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - monitoring-network
+    restart: always
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - monitoring-network
+    restart: always
+    healthcheck:
+      test: nc -z localhost 9092 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - monitoring-network
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/config:/etc/loki
+      - loki-data:/tmp
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - monitoring-network
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_FEATURE_TOGGLES_ENABLE=publicDashboards
+      - GF_SERVER_HTTP_ADDR=0.0.0.0
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - monitoring-network
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  loki-data:
+
+networks:
+  monitoring-network:
+    driver: bridge 
