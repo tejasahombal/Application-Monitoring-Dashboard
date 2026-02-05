@@ -1,0 +1,13 @@
+{
+  "name": "log-producer",
+  "version": "1.0.0",
+  "description": "Service to generate logs and send them to Kafka",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "axios": "^1.6.2"
+  }
+} 
